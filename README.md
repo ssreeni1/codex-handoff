@@ -37,9 +37,24 @@ export SAILBOX_HANDOFF_KEY='your-sail-api-key'
 
 Restart Codex and open a new task after installing. For Codex Desktop, configure this environment variable through your OS or secret manager so the app process inherits it.
 
+### Codex Desktop on macOS
+
+A terminal `export` does not reach an already-running Desktop app. Set the key
+for the GUI login session, then fully quit and reopen Codex:
+
+```sh
+launchctl setenv SAILBOX_HANDOFF_KEY='your-sail-api-key'
+```
+
+Use `launchctl unsetenv SAILBOX_HANDOFF_KEY` to remove it. In a Codex task, ask
+for `handoff_doctor` to confirm the plugin can see the key without displaying it.
+
 ## Use
 
 Ask Codex to `/handoff`. It will prepare a concise handoff brief, then request your approval before a sandbox is created or any authentication is forwarded.
+
+If setup fails, ask Codex to run `handoff_doctor`. It reports key, provider, and
+authentication availability without revealing credential values.
 
 After approval, your local task is free to continue. Say “check in on the sandbox” to retrieve status. On completion, Codex relays the sandbox report and plan, synchronizes its workspace changes locally, then stops the inactive Sailbox.
 

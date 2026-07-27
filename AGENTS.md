@@ -16,6 +16,8 @@ node --check scripts/sailbox-provider.mjs
 The plugin reads the Sail credential only from `SAILBOX_HANDOFF_KEY` (with the
 generic `HANDOFF_SANDBOX_API_KEY` compatibility fallback). Never add a key,
 token, auth file, or real conversation transcript to the repository or tests.
+Keep `handoff_doctor` value-safe: it may report presence/absence and remediation,
+but must never display a credential or auth-file contents.
 
 ## Design constraints
 

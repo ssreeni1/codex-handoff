@@ -101,6 +101,25 @@ async function providerKey() {
   return process.env.SAILBOX_HANDOFF_KEY || process.env.HANDOFF_SANDBOX_API_KEY || "";
 }
 
+async function doctor() {
+  const codexHome = process.env.CODEX_HOME || resolve(homedir(), ".codex");
+  const authFileAvailable = await readFile(resolve(codexHome, "auth.json"), "utf8").then(() => true).catch(() => false);
+  const keySource = process.env.SAILBOX_HANDOFF_KEY ? "SAILBOX_HANDOFF_KEY" : process.env.HANDOFF_SANDBOX_API_KEY ? "HANDOFF_SANDBOX_API_KEY" : "missing";
+  const lines = [
+    "Codex Handoff diagnostics (credential values are never displayed):",
+    `- Sail key: ${keySource === "missing" ? "missing" : `available via ${keySource}`}`,
+    `- Provider adapter: ${process.env.HANDOFF_PROVIDER_COMMAND ? "configured" : "missing"}`,
+    `- File-backed Codex auth: ${authFileAvailable ? "available" : "not found"}`,
+    `- Access-token auth: ${process.env.CODEX_ACCESS_TOKEN ? "available" : "not set"}`
+  ];
+  if (keySource === "missing") {
+    lines.push(process.platform === "darwin"
+      ? "- Fix for Codex Desktop on macOS: run `launchctl setenv SAILBOX_HANDOFF_KEY 'your-key'`, fully quit Codex, then reopen it."
+      : "- Fix: configure SAILBOX_HANDOFF_KEY in the environment of the Codex process, then restart Codex.");
+  }
+  return text(lines.join("\n"));
+}
+
 async function credentialHandoff(args) {
   const mode = args.credential_mode || "none";
   if (mode === "none") {
@@ -152,7 +171,7 @@ async function handoff(args) {
   if (!args.task?.trim()) throw new Error("task is required");
   const key = await providerKey();
   if (!key) {
-    throw new Error("SAILBOX_HANDOFF_KEY is not set for Codex Handoff.");
+    throw new Error("Codex Handoff cannot see SAILBOX_HANDOFF_KEY. For Codex Desktop, set it in the app's environment (on macOS: `launchctl setenv SAILBOX_HANDOFF_KEY 'your-key'`), fully quit Codex, then reopen it. Call handoff_doctor for safe diagnostics.");
   }
   const history = redact(String(args.conversation_history || ""));
   const brief = {
@@ -219,6 +238,7 @@ async function waitForReport(args) {
 }
 
 const tools = [
+  { name: "handoff_doctor", description: "Safely diagnose Sail-key, provider, and Codex-auth availability without displaying credential values.", inputSchema: { type: "object", properties: {} } },
   { name: "handoff", description: "Start a configured sandbox only after explicit approval to forward Codex credentials. It never starts an unauthenticated sandbox.", inputSchema: { type: "object", required: ["task", "credential_mode", "allow_credential_forwarding"], properties: { task: { type: "string" }, conversation_history: { type: "string", description: "A concise current-task history supplied by the caller." }, workspace: { type: "string" }, credential_mode: { type: "string", enum: ["auth_file", "access_token"] }, allow_credential_forwarding: { type: "boolean", const: true, description: "Explicit user confirmation to forward the selected Codex credential to this trusted Sailbox." } } } },
   { name: "handoff_status", description: "Poll a sandbox handoff and return its final report when complete.", inputSchema: { type: "object", required: ["handoff_id"], properties: { handoff_id: { type: "string" } } } }
   ,{ name: "handoff_wait", description: "Wait up to 55 seconds for a handoff report. Call repeatedly until it returns the final report, then relay its results and next-step plan to the initiating chat.", inputSchema: { type: "object", required: ["handoff_id"], properties: { handoff_id: { type: "string" }, max_wait_seconds: { type: "number", minimum: 1, maximum: 55 } } } }
@@ -229,6 +249,6 @@ process.stdin.on("data", data => { buffer += data; let n; while ((n = buffer.ind
 async function handle(line) { let req; try { req = JSON.parse(line); } catch { return; } try {
   if (req.method === "initialize") return reply(req.id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "codex-handoff", version: "0.1.0" } });
   if (req.method === "tools/list") return reply(req.id, { tools });
-  if (req.method === "tools/call") return reply(req.id, req.params.name === "handoff" ? await handoff(req.params.arguments || {}) : req.params.name === "handoff_status" ? await status(req.params.arguments || {}) : req.params.name === "handoff_wait" ? await waitForReport(req.params.arguments || {}) : (() => { throw new Error("Unknown tool"); })());
+  if (req.method === "tools/call") return reply(req.id, req.params.name === "handoff_doctor" ? await doctor() : req.params.name === "handoff" ? await handoff(req.params.arguments || {}) : req.params.name === "handoff_status" ? await status(req.params.arguments || {}) : req.params.name === "handoff_wait" ? await waitForReport(req.params.arguments || {}) : (() => { throw new Error("Unknown tool"); })());
   if (req.id !== undefined) reply(req.id, {});
 } catch (error) { if (req.id !== undefined) fail(req.id, error.message); } }

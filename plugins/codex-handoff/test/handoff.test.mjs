@@ -35,15 +35,27 @@ test("handoff syncs only provider-manifest files and retains no task history", a
   await writeFile(join(codexHome, "auth.json"), "{}\n");
   const server = startServer({ SAILBOX_HANDOFF_KEY: "test-key", CODEX_HOME: codexHome, HANDOFF_STATE_DIR: state, HANDOFF_PROVIDER_COMMAND: `node ${join(root, "scripts/mock-provider.mjs")}` });
   t.after(() => server.child.kill());
-  const launch = await server.call(1, "handoff", { task: "test task", conversation_history: "secret-token: no-store", workspace, credential_mode: "auth_file", allow_credential_forwarding: true });
+  const doctor = await server.call(1, "handoff_doctor", {});
+  assert.match(doctor.result.content[0].text, /available via SAILBOX_HANDOFF_KEY/);
+  assert.doesNotMatch(doctor.result.content[0].text, /test-key/);
+  const launch = await server.call(2, "handoff", { task: "test task", conversation_history: "secret-token: no-store", workspace, credential_mode: "auth_file", allow_credential_forwarding: true });
   assert.equal(launch.error, undefined);
   const handoffId = launch.result.content[0].text.match(/Handoff ID: ([\w-]+)/)[1];
-  const completion = await server.call(2, "handoff_status", { handoff_id: handoffId });
+  const completion = await server.call(3, "handoff_status", { handoff_id: handoffId });
   assert.match(completion.result.content[0].text, /synchronized \(1 files\)/);
   assert.equal(await readFile(join(workspace, "mock-result.txt"), "utf8"), "Mock sync completed.\n");
   assert.equal(await readFile(join(workspace, ".env"), "utf8"), "must-not-leave-local\n");
   const stateText = await readFile(join(state, `${handoffId}.json`), "utf8");
   assert.doesNotMatch(stateText, /secret-token|test task/);
+});
+
+test("doctor identifies a missing Sail key without exposing environment values", async t => {
+  const base = await mkdtemp(join(tmpdir(), "codex-handoff-test-"));
+  const server = startServer({ CODEX_HOME: join(base, "no-auth"), HANDOFF_STATE_DIR: join(base, "state"), HANDOFF_PROVIDER_COMMAND: "node missing-provider.mjs" });
+  t.after(() => server.child.kill());
+  const doctor = await server.call(1, "handoff_doctor", {});
+  assert.match(doctor.result.content[0].text, /Sail key: missing/);
+  assert.match(doctor.result.content[0].text, /launchctl setenv SAILBOX_HANDOFF_KEY/);
 });
 
 test("handoff rejects a sandbox path that escapes its workspace", async t => {
