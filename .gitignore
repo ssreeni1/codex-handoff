@@ -1,0 +1,3 @@
+plugins/codex-handoff/.state/
+plugins/codex-handoff/node_modules/
+.DS_Store

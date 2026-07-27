@@ -1,0 +1,9 @@
+{
+  "name": "codex-handoff",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@sailresearch/sdk": "^0.4.7"
+  }
+}

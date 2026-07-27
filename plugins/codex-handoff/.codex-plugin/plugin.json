@@ -1,0 +1,24 @@
+{
+  "name": "codex-handoff",
+  "version": "0.1.0+codex.20260727213639",
+  "description": "Continue a Codex task in an externally managed sandbox without exporting local OAuth credentials.",
+  "author": {
+    "name": "Codex Handoff contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Handoff",
+    "shortDescription": "Hand a task to a sandbox and collect its result.",
+    "longDescription": "Creates a portable, redacted task brief, starts a configured sandbox-provider adapter, and polls for its final report. Local Codex OAuth is never copied to the sandbox.",
+    "developerName": "Codex Handoff contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Hand off my current task to a configured sandbox"
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

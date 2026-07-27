@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "handoff": {
+      "command": "node",
+      "args": ["./server/index.mjs"],
+      "cwd": ".",
+      "env": {
+        "HANDOFF_STATE_DIR": "${pluginRoot}/.state",
+        "HANDOFF_PROVIDER_COMMAND": "node ./scripts/sailbox-provider.mjs"
+      }
+    }
+  }
+}
