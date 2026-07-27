@@ -9,7 +9,7 @@ Codex Handoff is a small, open-source Codex plugin for work that is useful to de
 1. You ask Codex to `/handoff` a task.
 2. Codex asks for explicit permission before it forwards your Codex login to a private sandbox.
 3. The plugin creates a Sailbox, uploads a filtered copy of the workspace, and starts Codex there.
-4. Your original chat stays available. Ask it to “check in on the sandbox” whenever you want status.
+4. Your original chat stays available. The plugin polls in the background for completion while the Codex task is open; ask it to “check in on the sandbox” whenever you want status.
 5. When the remote task finishes, its report and next plan are returned to the initiating chat; changed files are synced to the local workspace before the Sailbox is terminated.
 
 ## Install

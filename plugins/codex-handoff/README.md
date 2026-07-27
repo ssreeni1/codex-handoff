@@ -25,7 +25,7 @@ Restart Codex and start a new task after installation. Use your operating system
 
 ## Use
 
-Ask Codex to `/handoff`. It must ask for explicit permission before it forwards your Codex login. The original chat remains available while the Sailbox works. Say “check in on the sandbox” to retrieve progress; when complete, its workspace is merged into the initiating local workspace and the Sailbox is terminated.
+Ask Codex to `/handoff`. It must ask for explicit permission before it forwards your Codex login. The original chat remains available while the Sailbox works. While the Codex task stays open, the plugin polls in the background and terminates completed or failed Sailboxes. Say “check in on the sandbox” to retrieve progress; when complete, its workspace is merged into the initiating local workspace and the Sailbox is terminated.
 
 ## Security and data
 
