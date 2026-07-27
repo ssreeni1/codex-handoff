@@ -14,7 +14,8 @@ const RESULT_PATH = `${WORKSPACE}/result.json`;
 const RUNNER_PATH = `${WORKSPACE}/run-handoff.sh`;
 const LOG_PATH = `${WORKSPACE}/handoff.log`;
 const INPUT_ARCHIVE = "/tmp/codex-handoff-input.tgz";
-const OUTPUT_ARCHIVE = "/tmp/codex-handoff-output.tgz";
+const OUTPUT_MANIFEST = "/tmp/codex-handoff-output.json";
+const MAX_SYNC_BYTES = 48 * 1024 * 1024;
 
 async function readRequest() {
   let body = "";
@@ -99,7 +100,7 @@ async function status(request) {
   if (await box.fs.exists(RESULT_PATH)) {
     const result = JSON.parse((await box.fs.read(RESULT_PATH)).toString());
     const report = (await box.fs.exists(REPORT_PATH)) ? (await box.fs.read(REPORT_PATH)).toString() : "Codex completed without writing a report.";
-    return { status: "complete", report: `Sailbox ${box.sailboxId} ${result.status} (exit ${result.exit_code}).\n\n${report}` };
+    return { status: result.status === "complete" ? "complete" : "failed", report: `Sailbox ${box.sailboxId} ${result.status} (exit ${result.exit_code}).\n\n${report}` };
   }
   if (["failed", "terminated"].includes(box.status)) {
     return { status: "failed", report: `Sailbox ${box.sailboxId} is ${box.status} before Codex wrote a final report.` };
@@ -112,21 +113,28 @@ async function sync(request) {
   const apiKey = process.env.SAIL_API_KEY || process.env.SANDBOX_API_KEY;
   if (!apiKey) throw new Error("Missing Sail key for workspace synchronization.");
   const box = await Sailbox.get(request.remote_id, { client: Client.fromConfig({ apiKey }) });
-  try {
-    const pack = await box.exec(`tar -czf ${OUTPUT_ARCHIVE} --exclude=brief.md --exclude=run-handoff.sh --exclude=handoff.log --exclude=result.json -C ${WORKSPACE} .`);
-    const result = await pack.wait();
-    if (result.exitCode !== 0) throw new Error(`Could not package sandbox workspace: ${result.stderr || result.stdout}`);
-    const bytes = await box.fs.read(OUTPUT_ARCHIVE);
-    if (bytes.length > 48 * 1024 * 1024) throw new Error("Sandbox workspace archive exceeds the 48 MiB sync limit.");
-    return { workspace_archive_base64: bytes.toString("base64") };
-  } finally {
-    await box.terminate().catch(() => {});
-  }
+  // Never return a sandbox-authored archive for local extraction. This manifest
+  // contains regular files only; the local side validates every relative path.
+  const builder = `const fs=require('fs/promises'),path=require('path');const root=${JSON.stringify(WORKSPACE)},out=${JSON.stringify(OUTPUT_MANIFEST)},skip=new Set(['brief.md','run-handoff.sh','handoff.log','result.json']);let total=0,files=[];async function walk(dir){for(const entry of await fs.readdir(dir,{withFileTypes:true})){const full=path.join(dir,entry.name),rel=path.relative(root,full);if(entry.isDirectory()){await walk(full);continue}if(!entry.isFile()||skip.has(rel))continue;const data=await fs.readFile(full);total+=data.length;if(total>${MAX_SYNC_BYTES})throw Error('Sandbox file sync exceeds the 48 MiB limit.');files.push({path:rel,data_base64:data.toString('base64'),mode:(await fs.stat(full)).mode&511})}}walk(root).then(async()=>fs.writeFile(out,JSON.stringify({files}))).catch(error=>{console.error(error.stack);process.exitCode=1})`;
+  const build = await box.exec(`node -e ${JSON.stringify(builder)}`);
+  const result = await build.wait();
+  if (result.exitCode !== 0) throw new Error(`Could not build sandbox file manifest: ${result.stderr || result.stdout}`);
+  const manifest = JSON.parse((await box.fs.read(OUTPUT_MANIFEST)).toString());
+  if (!Array.isArray(manifest.files)) throw new Error("Sandbox produced an invalid file manifest.");
+  return manifest;
+}
+
+async function terminate(request) {
+  const apiKey = process.env.SAIL_API_KEY || process.env.SANDBOX_API_KEY;
+  if (!apiKey) throw new Error("Missing Sail key for Sailbox termination.");
+  const box = await Sailbox.get(request.remote_id, { client: Client.fromConfig({ apiKey }) });
+  await box.terminate();
+  return { terminated: true };
 }
 
 try {
   const request = await readRequest();
-  const response = request.action === "launch" ? await launch(request) : request.action === "status" ? await status(request) : request.action === "sync" ? await sync(request) : (() => { throw new Error(`Unsupported action: ${request.action}`); })();
+  const response = request.action === "launch" ? await launch(request) : request.action === "status" ? await status(request) : request.action === "sync" ? await sync(request) : request.action === "terminate" ? await terminate(request) : (() => { throw new Error(`Unsupported action: ${request.action}`); })();
   process.stdout.write(JSON.stringify(response));
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

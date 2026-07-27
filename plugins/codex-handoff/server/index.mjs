@@ -4,13 +4,15 @@
  * and vendor SDKs stay outside the plugin and can be audited independently.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, writeFile, unlink, stat } from "node:fs/promises";
+import { resolve, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
 const stateDir = resolve(process.env.HANDOFF_STATE_DIR || ".handoff-state");
 const MAX_BRIEF_CHARS = 60_000;
+const MAX_SYNC_BYTES = 48 * 1024 * 1024;
+const EXCLUDED_PATH_SEGMENTS = new Set([".git", ".codex", ".env", "node_modules", ".aws", ".ssh", ".gcloud", ".kube"]);
 const SECRET = /(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|secret)\s*[:=]\s*[^\s,;]+/gi;
 
 function reply(id, result) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`); }
@@ -32,19 +34,41 @@ async function runLocal(command, args) {
 
 async function packageWorkspace(workspace, id) {
   const output = archivePath(id);
-  await runLocal("tar", ["-czf", output, "--exclude=.git", "--exclude=node_modules", "--exclude=.env", "--exclude=.codex", "-C", workspace, "."]);
-  const bytes = await readFile(output);
-  if (bytes.length > 48 * 1024 * 1024) throw new Error("Workspace archive exceeds the 48 MiB handoff limit.");
-  return bytes.toString("base64");
+  const directory = await stat(workspace).catch(() => null);
+  if (!directory?.isDirectory()) throw new Error("workspace must be a readable directory.");
+  try {
+    await runLocal("tar", ["-czf", output, "--exclude=.git", "--exclude=.codex", "--exclude=.env", "--exclude=.env.*", "--exclude=node_modules", "--exclude=.npmrc", "--exclude=.pypirc", "--exclude=.aws", "--exclude=.ssh", "--exclude=.gcloud", "--exclude=.kube", "--exclude=*.pem", "--exclude=*.key", "--exclude=id_rsa", "-C", workspace, "."]);
+    const bytes = await readFile(output);
+    if (bytes.length > MAX_SYNC_BYTES) throw new Error("Workspace archive exceeds the 48 MiB handoff limit.");
+    return bytes.toString("base64");
+  } finally {
+    await unlink(output).catch(() => {});
+  }
 }
 
 async function syncWorkspace(saved, id, key) {
   const remote = await runAdapter({ protocol_version: 1, action: "sync", handoff_id: id, remote_id: saved.remote.id }, key);
-  if (!remote.workspace_archive_base64) throw new Error("Sandbox did not return a workspace archive.");
-  const output = archivePath(`${id}.output`);
-  await writeFile(output, Buffer.from(remote.workspace_archive_base64, "base64"), { mode: 0o600 });
-  await runLocal("tar", ["-xzf", output, "-C", saved.workspace]);
-  return remote;
+  if (!Array.isArray(remote.files)) throw new Error("Sandbox did not return a file manifest.");
+  let bytes = 0;
+  const files = remote.files.map(file => {
+    if (!file || typeof file.path !== "string" || typeof file.data_base64 !== "string") throw new Error("Sandbox returned an invalid file manifest.");
+    const normalized = file.path.replaceAll("\\\\", "/");
+    const segments = normalized.split("/");
+    if (!normalized || normalized.startsWith("/") || segments.some(segment => !segment || segment === "." || segment === ".." || EXCLUDED_PATH_SEGMENTS.has(segment) || segment === ".npmrc" || segment === ".pypirc" || segment === "id_rsa" || /\.(pem|key)$/i.test(segment))) {
+      throw new Error(`Refusing unsafe sandbox path: ${file.path}`);
+    }
+    const target = resolve(saved.workspace, normalized);
+    if (relative(saved.workspace, target).startsWith(`..${sep}`) || relative(saved.workspace, target) === "..") throw new Error(`Refusing path outside workspace: ${file.path}`);
+    const data = Buffer.from(file.data_base64, "base64");
+    bytes += data.length;
+    if (bytes > MAX_SYNC_BYTES) throw new Error("Sandbox file sync exceeds the 48 MiB limit.");
+    return { target, data, mode: Number.isInteger(file.mode) ? file.mode & 0o777 : 0o644 };
+  });
+  for (const file of files) {
+    await mkdir(resolve(file.target, ".."), { recursive: true, mode: 0o700 });
+    await writeFile(file.target, file.data, { mode: file.mode || 0o644 });
+  }
+  return { files: files.length, bytes };
 }
 
 async function providerKey() {
@@ -115,11 +139,13 @@ async function handoff(args) {
     requested_at: new Date().toISOString()
   };
   await mkdir(stateDir, { recursive: true });
-  const workspace_archive_base64 = await packageWorkspace(brief.workspace, brief.handoff_id);
+  let workspace_archive_base64 = await packageWorkspace(brief.workspace, brief.handoff_id);
   const credential_handoff = await credentialHandoff(args);
-  const remote = await runAdapter({ ...brief, credential_handoff, workspace_archive_base64 }, key);
+  let remote;
+  try { remote = await runAdapter({ ...brief, credential_handoff, workspace_archive_base64 }, key); }
+  finally { workspace_archive_base64 = undefined; }
   if (!remote.id) throw new Error("Provider adapter response must include id.");
-  await writeFile(statePath(brief.handoff_id), JSON.stringify({ ...brief, remote, created_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
+  await writeFile(statePath(brief.handoff_id), JSON.stringify({ handoff_id: brief.handoff_id, workspace: brief.workspace, remote, created_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
   return text(`Sandbox started. Handoff ID: ${brief.handoff_id}\nRemote ID: ${remote.id}${remote.url ? `\nURL: ${remote.url}` : ""}${credential_handoff ? `\nCodex authentication forwarded via ${credential_handoff.type}; it was not saved locally.` : "\nNo Codex authentication was forwarded."}\nUse handoff_status with the handoff ID to collect the report.`);
 }
 
@@ -130,13 +156,16 @@ async function status(args) {
 async function collectStatus(handoffId) {
   if (!handoffId) throw new Error("handoff_id is required");
   const saved = JSON.parse(await readFile(statePath(handoffId), "utf8"));
+  if (saved.completed_at) return text("Sandbox handoff already completed and its workspace was synchronized.");
   const key = await providerKey();
   if (!key) throw new Error("No Sail key is available to check this handoff.");
   const remote = await runAdapter({ protocol_version: 1, action: "status", handoff_id: handoffId, remote_id: saved.remote.id }, key);
   if (remote.status === "complete" && remote.report) {
     const synced = await syncWorkspace(saved, handoffId, key);
+    await runAdapter({ protocol_version: 1, action: "terminate", handoff_id: handoffId, remote_id: saved.remote.id }, key);
     const digest = createHash("sha256").update(remote.report).digest("hex").slice(0, 12);
-    return text(`Sandbox workspace synchronized and Sailbox terminated.\n\nSandbox report (sha256:${digest}):\n\n${remote.report}`);
+    await writeFile(statePath(handoffId), JSON.stringify({ handoff_id: handoffId, workspace: saved.workspace, remote: saved.remote, created_at: saved.created_at, completed_at: new Date().toISOString(), synced_files: synced.files }, null, 2), { mode: 0o600 });
+    return text(`Sandbox workspace synchronized (${synced.files} files) and Sailbox terminated.\n\nSandbox report (sha256:${digest}):\n\n${remote.report}`);
   }
   return text(`Sandbox status: ${remote.status || "unknown"}${remote.url ? `\nURL: ${remote.url}` : ""}${remote.detail ? `\n\n${remote.detail}` : ""}`);
 }

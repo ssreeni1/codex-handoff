@@ -49,10 +49,11 @@ After approval, your local task is free to continue. Say “check in on the sand
 - Codex authentication is never forwarded without explicit approval for that handoff.
 - Sail credentials and Codex credentials are not written to the repository or plugin state.
 - Uploads exclude `.git`, `node_modules`, `.env`, and `.codex`.
-- Handoff archives are limited to 48 MiB in either direction.
+- Uploads and returned file manifests are limited to 48 MiB.
+- Sandbox output is returned as a regular-file manifest, not an archive. Paths that escape the workspace or target credential/configuration locations are rejected.
 - Control files, logs, and the handoff brief are excluded from the files copied back.
 
-Only approve authentication forwarding to a Sail account and sandbox provider you trust. File-backed login uses `$CODEX_HOME/auth.json`; token-based login uses `CODEX_ACCESS_TOKEN`.
+Only approve authentication forwarding to a Sail account and sandbox provider you trust. File-backed login uses `$CODEX_HOME/auth.json`; token-based login uses `CODEX_ACCESS_TOKEN`. The local handoff record deliberately stores only the remote ID, workspace path, and lifecycle metadata—not the task, conversation history, or credentials.
 
 ## Development
 

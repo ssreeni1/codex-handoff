@@ -32,7 +32,8 @@ Ask Codex to `/handoff`. It must ask for explicit permission before it forwards 
 - No Sail or Codex credential is written to repository files or plugin state.
 - The local workspace upload excludes `.git`, `node_modules`, `.env`, and `.codex`.
 - Sandbox control files, logs, and the handoff brief are not copied back.
-- Workspace archives are capped at 48 MiB in each direction.
+- Uploads and returned file manifests are capped at 48 MiB.
+- Sandbox output is a validated regular-file manifest, never an archive extracted into the local workspace.
 - The plugin creates private Sailboxes only.
 
 `auth_file` uses `$CODEX_HOME/auth.json` and only works for file-backed Codex authentication. `access_token` uses `CODEX_ACCESS_TOKEN`. Do not approve forwarding to a provider/account you do not trust.
@@ -43,6 +44,15 @@ Ask Codex to `/handoff`. It must ask for explicit permission before it forwards 
 npm ci
 node --check server/index.mjs
 node --check scripts/sailbox-provider.mjs
+npm test
 ```
 
 The server is dependency-free; only the Sail adapter uses `@sailresearch/sdk`. `scripts/mock-provider.mjs` is a protocol-only test fixture and never creates a sandbox.
+
+To run the opt-in live test against a disposable workspace, provide `SAILBOX_HANDOFF_KEY` and run:
+
+```sh
+node test/e2e-sailbox.mjs /absolute/path/to/workspace
+```
+
+This test forwards file-backed Codex authentication and lets the sandbox write to the supplied workspace. Use a disposable copy, not a project with uncommitted work.
