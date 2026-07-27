@@ -114,11 +114,11 @@ async function handoff(args) {
     workspace: args.workspace || process.cwd(),
     requested_at: new Date().toISOString()
   };
+  await mkdir(stateDir, { recursive: true });
   const workspace_archive_base64 = await packageWorkspace(brief.workspace, brief.handoff_id);
   const credential_handoff = await credentialHandoff(args);
   const remote = await runAdapter({ ...brief, credential_handoff, workspace_archive_base64 }, key);
   if (!remote.id) throw new Error("Provider adapter response must include id.");
-  await mkdir(stateDir, { recursive: true });
   await writeFile(statePath(brief.handoff_id), JSON.stringify({ ...brief, remote, created_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
   return text(`Sandbox started. Handoff ID: ${brief.handoff_id}\nRemote ID: ${remote.id}${remote.url ? `\nURL: ${remote.url}` : ""}${credential_handoff ? `\nCodex authentication forwarded via ${credential_handoff.type}; it was not saved locally.` : "\nNo Codex authentication was forwarded."}\nUse handoff_status with the handoff ID to collect the report.`);
 }
