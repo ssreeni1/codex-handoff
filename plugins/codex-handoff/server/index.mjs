@@ -14,12 +14,13 @@ const MAX_BRIEF_CHARS = 60_000;
 const MAX_SYNC_BYTES = 48 * 1024 * 1024;
 const EXCLUDED_PATH_SEGMENTS = new Set([".git", ".codex", ".env", "node_modules", ".aws", ".ssh", ".gcloud", ".kube"]);
 const AUTO_POLL_MS = Math.max(10_000, Number(process.env.HANDOFF_AUTO_POLL_MS || 45_000));
+const WATCHER_URI = "ui://codex-handoff/watcher.html";
 const cleanupTimers = new Map();
 const SECRET = /(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|secret)\s*[:=]\s*[^\s,;]+/gi;
 
 function reply(id, result) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`); }
 function fail(id, message) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } })}\n`); }
-function text(value) { return { content: [{ type: "text", text: value }] }; }
+function text(value, structuredContent) { return { content: [{ type: "text", text: value }], ...(structuredContent ? { structuredContent } : {}) }; }
 function notify(value) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info", data: value } })}\n`); }
 function redact(value) { return value.replace(SECRET, (match, key) => `${key}: [REDACTED]`); }
 function statePath(id) { return resolve(stateDir, `${id}.json`); }
@@ -204,7 +205,11 @@ async function handoff(args) {
   if (!remote.id) throw new Error("Provider adapter response must include id.");
   await writeFile(statePath(brief.handoff_id), JSON.stringify({ handoff_id: brief.handoff_id, workspace: brief.workspace, remote, created_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
   startAutoCleanup(brief.handoff_id);
-  return text(`Sandbox started. Handoff ID: ${brief.handoff_id}\nRemote ID: ${remote.id}${remote.url ? `\nURL: ${remote.url}` : ""}\nModel: ${model || "Codex default"}${credential_handoff ? `\nCodex authentication forwarded via ${credential_handoff.type}; it was not saved locally.` : "\nNo Codex authentication was forwarded."}\nUse handoff_status with the handoff ID to collect the report.`);
+  return text(`Sandbox started. Handoff ID: ${brief.handoff_id}\nRemote ID: ${remote.id}${remote.url ? `\nURL: ${remote.url}` : ""}\nModel: ${model || "Codex default"}${credential_handoff ? `\nCodex authentication forwarded via ${credential_handoff.type}; it was not saved locally.` : "\nNo Codex authentication was forwarded."}\nThis task will receive the sandbox report automatically when it completes.`, {
+    handoff_id: brief.handoff_id,
+    remote_id: remote.id,
+    status: "running"
+  });
 }
 
 async function status(args) {
@@ -267,7 +272,7 @@ async function waitForReport(args) {
 
 const tools = [
   { name: "handoff_doctor", description: "Safely diagnose Sail-key, provider, and Codex-auth availability without displaying credential values.", inputSchema: { type: "object", properties: {} } },
-  { name: "handoff", description: "Start a configured sandbox only after explicit approval to forward Codex credentials. It never starts an unauthenticated sandbox.", inputSchema: { type: "object", required: ["task", "credential_mode", "allow_credential_forwarding"], properties: { task: { type: "string" }, conversation_history: { type: "string", description: "A concise current-task history supplied by the caller." }, workspace: { type: "string" }, model: { type: "string", description: "Optional Codex model for the sandbox, for example gpt-5.4." }, credential_mode: { type: "string", enum: ["auth_file", "access_token"] }, allow_credential_forwarding: { type: "boolean", const: true, description: "Explicit user confirmation to forward the selected Codex credential to this trusted Sailbox." } } } },
+  { name: "handoff", description: "Start a configured sandbox only after explicit approval to forward Codex credentials. It never starts an unauthenticated sandbox.", inputSchema: { type: "object", required: ["task", "credential_mode", "allow_credential_forwarding"], properties: { task: { type: "string" }, conversation_history: { type: "string", description: "A concise current-task history supplied by the caller." }, workspace: { type: "string" }, model: { type: "string", description: "Optional Codex model for the sandbox, for example gpt-5.4." }, credential_mode: { type: "string", enum: ["auth_file", "access_token"] }, allow_credential_forwarding: { type: "boolean", const: true, description: "Explicit user confirmation to forward the selected Codex credential to this trusted Sailbox." } } }, _meta: { ui: { resourceUri: WATCHER_URI }, "openai/outputTemplate": WATCHER_URI } },
   { name: "handoff_status", description: "Poll a sandbox handoff and return its final report when complete.", inputSchema: { type: "object", required: ["handoff_id"], properties: { handoff_id: { type: "string" } } } }
   ,{ name: "handoff_wait", description: "Wait up to 55 seconds for a handoff report. Call repeatedly until it returns the final report, then relay its results and next-step plan to the initiating chat.", inputSchema: { type: "object", required: ["handoff_id"], properties: { handoff_id: { type: "string" }, max_wait_seconds: { type: "number", minimum: 1, maximum: 55 } } } }
 ];
@@ -275,7 +280,12 @@ process.stdin.setEncoding("utf8");
 let buffer = "";
 process.stdin.on("data", data => { buffer += data; let n; while ((n = buffer.indexOf("\n")) >= 0) { const line = buffer.slice(0, n); buffer = buffer.slice(n + 1); if (line.trim()) handle(line); } });
 async function handle(line) { let req; try { req = JSON.parse(line); } catch { return; } try {
-  if (req.method === "initialize") return reply(req.id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "codex-handoff", version: "0.1.0" } });
+  if (req.method === "initialize") return reply(req.id, { protocolVersion: "2024-11-05", capabilities: { tools: {}, resources: {} }, serverInfo: { name: "codex-handoff", version: "0.1.0" } });
+  if (req.method === "resources/list") return reply(req.id, { resources: [{ uri: WATCHER_URI, name: "Codex Handoff watcher", mimeType: "text/html;profile=mcp-app", description: "Shows a running handoff and posts its result back to the initiating task." }] });
+  if (req.method === "resources/read") {
+    if (req.params?.uri !== WATCHER_URI) throw new Error("Unknown resource");
+    return reply(req.id, { contents: [{ uri: WATCHER_URI, mimeType: "text/html;profile=mcp-app", text: await readFile(new URL("../assets/handoff-watcher.html", import.meta.url), "utf8"), _meta: { ui: { prefersBorder: true } } }] });
+  }
   if (req.method === "tools/list") return reply(req.id, { tools });
   if (req.method === "tools/call") return reply(req.id, req.params.name === "handoff_doctor" ? await doctor() : req.params.name === "handoff" ? await handoff(req.params.arguments || {}) : req.params.name === "handoff_status" ? await status(req.params.arguments || {}) : req.params.name === "handoff_wait" ? await waitForReport(req.params.arguments || {}) : (() => { throw new Error("Unknown tool"); })());
   if (req.id !== undefined) reply(req.id, {});

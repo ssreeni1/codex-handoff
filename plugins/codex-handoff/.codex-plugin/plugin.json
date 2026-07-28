@@ -1,7 +1,7 @@
 {
   "name": "codex-handoff",
-  "version": "0.1.0+codex.20260728161008",
-  "description": "Continue a Codex task in an externally managed sandbox without exporting local OAuth credentials.",
+  "version": "0.1.0+codex.20260728161540",
+  "description": "Continue a Codex task in a Sailbox and return its synchronized result to the originating task.",
   "author": {
     "name": "Codex Handoff contributors"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Codex Handoff",
     "shortDescription": "Hand a task to a sandbox and collect its result.",
-    "longDescription": "Creates a portable, redacted task brief, starts a configured sandbox-provider adapter, and polls for its final report. Local Codex OAuth is never copied to the sandbox.",
+    "longDescription": "With explicit consent, forwards Codex authentication to a private Sailbox, completes the task there, synchronizes changed files, and returns the report to the originating task.",
     "developerName": "Codex Handoff contributors",
     "category": "Productivity",
     "capabilities": [

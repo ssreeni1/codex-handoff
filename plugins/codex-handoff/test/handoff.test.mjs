@@ -15,14 +15,30 @@ function startServer(env) {
   child.stdout.on("data", chunk => { buffer += chunk; let index; while ((index = buffer.indexOf("\n")) >= 0) { replies.push(JSON.parse(buffer.slice(0, index))); buffer = buffer.slice(index + 1); } });
   return {
     child,
-    async call(id, name, args) {
-      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+    async rpc(id, method, params = {}) {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
       while (!replies.some(reply => reply.id === id)) await new Promise(resolve => setTimeout(resolve, 10));
       const index = replies.findIndex(reply => reply.id === id);
       return replies.splice(index, 1)[0];
+    },
+    async call(id, name, args) {
+      return this.rpc(id, "tools/call", { name, arguments: args });
     }
   };
 }
+
+test("handoff exposes an in-chat watcher that can return completion to its initiating task", async t => {
+  const server = startServer({});
+  t.after(() => server.child.kill());
+  const initialized = await server.rpc(1, "initialize", { protocolVersion: "2024-11-05", capabilities: {} });
+  assert.deepEqual(initialized.result.capabilities.resources, {});
+  const listed = await server.rpc(2, "tools/list");
+  const handoff = listed.result.tools.find(tool => tool.name === "handoff");
+  assert.equal(handoff._meta.ui.resourceUri, "ui://codex-handoff/watcher.html");
+  const resource = await server.rpc(3, "resources/read", { uri: handoff._meta.ui.resourceUri });
+  assert.match(resource.result.contents[0].text, /ui\/message/);
+  assert.match(resource.result.contents[0].text, /handoff_status/);
+});
 
 test("handoff syncs only provider-manifest files and retains no task history", async t => {
   const base = await mkdtemp(join(tmpdir(), "codex-handoff-test-"));
