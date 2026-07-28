@@ -53,10 +53,12 @@ for `handoff_doctor` to confirm the plugin can see the key without displaying it
 
 Ask Codex to `/handoff`. It will prepare a concise handoff brief, then request your approval before a sandbox is created or any authentication is forwarded.
 
+The sandbox treats that brief as a goal: it creates an implementation plan, executes the plan, verifies its work, and returns the plan with its results. To choose the sandbox model, say for example: “`/handoff` this using `gpt-5.4`.” If no model is named, Codex uses its configured default.
+
 If setup fails, ask Codex to run `handoff_doctor`. It reports key, provider, and
 authentication availability without revealing credential values.
 
-After approval, your local task is free to continue. Say “check in on the sandbox” to retrieve status. On completion, Codex relays the sandbox report and plan, synchronizes its workspace changes locally, then stops the inactive Sailbox.
+After approval, your local task is free to continue. On completion, the plugin sends a best-effort MCP notification, synchronizes workspace changes locally, and stops the Sailbox. Say “check in on the sandbox” to retrieve the retained sandbox report and plan; the report is removed from plugin state after delivery.
 
 ## Security model
 

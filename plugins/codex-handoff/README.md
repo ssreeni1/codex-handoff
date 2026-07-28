@@ -27,7 +27,7 @@ On macOS with Codex Desktop, a terminal `export` is insufficient for an already-
 
 ## Use
 
-Ask Codex to `/handoff`. It must ask for explicit permission before it forwards your Codex login. The original chat remains available while the Sailbox works. While the Codex task stays open, the plugin polls in the background and terminates completed or failed Sailboxes. Say “check in on the sandbox” to retrieve progress; when complete, its workspace is merged into the initiating local workspace and the Sailbox is terminated.
+Ask Codex to `/handoff`. It must ask for explicit permission before it forwards your Codex login. The brief becomes the sandbox's goal: it creates a plan, executes it to completion, verifies the result, and returns the plan in its final report. To select a model, ask for `/handoff` using that model (for example `gpt-5.4`); otherwise Codex uses its configured default. The original chat remains available while the Sailbox works. While the Codex task stays open, the plugin polls in the background and terminates completed or failed Sailboxes. Completion produces a best-effort MCP notification; say “check in on the sandbox” to retrieve the retained final report and plan. The report is removed from plugin state after it is delivered.
 
 If a handoff cannot start, use `handoff_doctor` before retrying. It reports whether the Codex process can see a Sail key, provider adapter, and usable authentication without exposing their values.
 
@@ -56,7 +56,7 @@ The server is dependency-free; only the Sail adapter uses `@sailresearch/sdk`. `
 To run the opt-in live test against a disposable workspace, provide `SAILBOX_HANDOFF_KEY` and run:
 
 ```sh
-node test/e2e-sailbox.mjs /absolute/path/to/workspace
+node test/e2e-sailbox.mjs /absolute/path/to/workspace [model]
 ```
 
 This test forwards file-backed Codex authentication and lets the sandbox write to the supplied workspace. Use a disposable copy, not a project with uncommitted work.

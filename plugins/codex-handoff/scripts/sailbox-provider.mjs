@@ -9,10 +9,10 @@ const APP_NAME = process.env.HANDOFF_SAIL_APP || "codex-handoff";
 const BOX_SIZE = process.env.HANDOFF_SAIL_SIZE || "s";
 const WORKSPACE = "/workspace/codex-handoff";
 const BRIEF_PATH = `${WORKSPACE}/brief.md`;
-const REPORT_PATH = `${WORKSPACE}/report.md`;
-const RESULT_PATH = `${WORKSPACE}/result.json`;
-const RUNNER_PATH = `${WORKSPACE}/run-handoff.sh`;
-const LOG_PATH = `${WORKSPACE}/handoff.log`;
+const REPORT_PATH = "/tmp/codex-handoff-report.md";
+const RESULT_PATH = "/tmp/codex-handoff-result.json";
+const RUNNER_PATH = "/tmp/codex-handoff-run.sh";
+const LOG_PATH = "/tmp/codex-handoff.log";
 const INPUT_ARCHIVE = "/tmp/codex-handoff-input.tgz";
 const OUTPUT_MANIFEST = "/tmp/codex-handoff-output.json";
 const MAX_SYNC_BYTES = 48 * 1024 * 1024;
@@ -26,7 +26,7 @@ async function readRequest() {
 }
 
 function taskBrief(request) {
-  return `# Codex sandbox handoff\n\n## Task\n${request.task}\n\n## Conversation context\n${request.conversation_history || "No extra context was supplied."}\n\n## Local workspace\n${request.workspace || "Not supplied"}\n\n## Instructions\nContinue the task autonomously in this Sailbox. Work in ${WORKSPACE}. Record a concise final report in ${REPORT_PATH}, including changes, verification, remaining limitations, and a recommended next-step plan for the initiating chat. Do not include credentials in the report.\n`;
+  return `# Codex sandbox handoff\n\n## Goal\n${request.task}\n\n## Conversation context\n${request.conversation_history || "No extra context was supplied."}\n\n## Local workspace\n${request.workspace || "Not supplied"}\n\n## Execution protocol\n1. Treat the Goal above as your committed objective.\n2. First create a concise implementation plan, then execute that plan autonomously to completion; do not stop after planning.\n3. Work only in ${WORKSPACE}.\n4. Verify the completed work with relevant tests or checks.\n5. Your final response must include: the goal, the plan you followed, changes made, verification, limitations, and recommended next steps for the initiating chat. Do not include credentials.\n`;
 }
 
 async function prepareCredential(box, credential) {
@@ -50,6 +50,7 @@ async function launch(request) {
   // The SDK snapshots environment credentials when it builds its default
   // client, so always use an explicit client for protocol-injected secrets.
   const client = Client.fromConfig({ apiKey });
+  if (request.model !== undefined && (typeof request.model !== "string" || !/^[A-Za-z0-9._:/-]+$/.test(request.model))) throw new Error("Invalid requested model.");
   const app = await App.find(APP_NAME, { mintIfMissing: true, client });
   const box = await Sailbox.create({
     client,
@@ -75,9 +76,12 @@ async function launch(request) {
       `mkdir -p ${WORKSPACE}`,
       "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl nodejs npm && npm install -g @openai/codex",
       credential.login,
-      `if codex exec --dangerously-bypass-approvals-and-sandbox -C ${WORKSPACE} -o ${REPORT_PATH} - < ${BRIEF_PATH}; then status=complete; code=0; else status=failed; code=$?; fi`,
+      `if codex exec --dangerously-bypass-approvals-and-sandbox -C ${WORKSPACE}${request.model ? ` --model ${request.model}` : ""} -o ${REPORT_PATH} - < ${BRIEF_PATH}; then status=complete; code=0; else status=failed; code=$?; fi`,
       `printf '{\"status\":\"%s\",\"exit_code\":%s}\n' \"$status\" \"$code\" > ${RESULT_PATH}`,
-      "exit 0",
+      // Keep the Sailbox alive with effectively zero CPU until the local MCP
+      // host retrieves the result, syncs files, and explicitly terminates it.
+      // Without this sentinel, providers may reclaim the box before sync.
+      "while sleep 60; do :; done",
     ].filter(Boolean).join("; ");
     await box.fs.write(RUNNER_PATH, `#!/usr/bin/env bash\n${runner}\n`, { mode: 0o700 });
     // Sail's detached exec is best-effort for this workload. A normal shell
@@ -115,7 +119,7 @@ async function sync(request) {
   const box = await Sailbox.get(request.remote_id, { client: Client.fromConfig({ apiKey }) });
   // Never return a sandbox-authored archive for local extraction. This manifest
   // contains regular files only; the local side validates every relative path.
-  const builder = `const fs=require('fs/promises'),path=require('path');const root=${JSON.stringify(WORKSPACE)},out=${JSON.stringify(OUTPUT_MANIFEST)},skip=new Set(['brief.md','run-handoff.sh','handoff.log','result.json']);let total=0,files=[];async function walk(dir){for(const entry of await fs.readdir(dir,{withFileTypes:true})){const full=path.join(dir,entry.name),rel=path.relative(root,full);if(entry.isDirectory()){await walk(full);continue}if(!entry.isFile()||skip.has(rel))continue;const data=await fs.readFile(full);total+=data.length;if(total>${MAX_SYNC_BYTES})throw Error('Sandbox file sync exceeds the 48 MiB limit.');files.push({path:rel,data_base64:data.toString('base64'),mode:(await fs.stat(full)).mode&511})}}walk(root).then(async()=>fs.writeFile(out,JSON.stringify({files}))).catch(error=>{console.error(error.stack);process.exitCode=1})`;
+  const builder = `const fs=require('fs/promises'),path=require('path');const root=${JSON.stringify(WORKSPACE)},out=${JSON.stringify(OUTPUT_MANIFEST)};let total=0,files=[];async function walk(dir){for(const entry of await fs.readdir(dir,{withFileTypes:true})){const full=path.join(dir,entry.name),rel=path.relative(root,full);if(entry.isDirectory()){await walk(full);continue}if(!entry.isFile())continue;const data=await fs.readFile(full);total+=data.length;if(total>${MAX_SYNC_BYTES})throw Error('Sandbox file sync exceeds the 48 MiB limit.');files.push({path:rel,data_base64:data.toString('base64'),mode:(await fs.stat(full)).mode&511})}}walk(root).then(async()=>fs.writeFile(out,JSON.stringify({files}))).catch(error=>{console.error(error.stack);process.exitCode=1})`;
   const build = await box.exec(`node -e ${JSON.stringify(builder)}`);
   const result = await build.wait();
   if (result.exitCode !== 0) throw new Error(`Could not build sandbox file manifest: ${result.stderr || result.stdout}`);

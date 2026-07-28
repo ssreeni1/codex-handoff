@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const workspace = process.argv[2];
-if (!workspace) throw new Error("Usage: node test/e2e-sailbox.mjs /absolute/workspace/path");
+const model = process.argv[3];
+if (!workspace) throw new Error("Usage: node test/e2e-sailbox.mjs /absolute/workspace/path [model]");
 if (!process.env.SAILBOX_HANDOFF_KEY) throw new Error("SAILBOX_HANDOFF_KEY is required.");
 const state = await mkdtemp(join(tmpdir(), "codex-handoff-e2e-"));
 await mkdir(state, { recursive: true });
@@ -26,6 +27,7 @@ try {
     task: "End-to-end handoff test. Work only in this Conway's Game of Life project. Run its existing test suite, inspect the implementation, and create HANDOFF_E2E.md with the test result, one concise observation, and a recommended next step. Do not modify existing source files.",
     conversation_history: "This is an authorized end-to-end validation of Codex Handoff. Do not include secrets in generated files.",
     workspace,
+    model,
     credential_mode: "auth_file",
     allow_credential_forwarding: true
   });

@@ -1,6 +1,6 @@
 {
   "name": "codex-handoff",
-  "version": "0.1.0+codex.20260727233628",
+  "version": "0.1.0+codex.20260728025601",
   "description": "Continue a Codex task in an externally managed sandbox without exporting local OAuth credentials.",
   "author": {
     "name": "Codex Handoff contributors"

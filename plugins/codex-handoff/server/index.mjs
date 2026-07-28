@@ -3,7 +3,7 @@
  * Small dependency-free MCP server. Providers are external executables so keys
  * and vendor SDKs stay outside the plugin and can be audited independently.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, unlink, stat } from "node:fs/promises";
 import { resolve, relative, sep } from "node:path";
 import { homedir } from "node:os";
@@ -20,6 +20,7 @@ const SECRET = /(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|co
 function reply(id, result) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`); }
 function fail(id, message) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } })}\n`); }
 function text(value) { return { content: [{ type: "text", text: value }] }; }
+function notify(value) { process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info", data: value } })}\n`); }
 function redact(value) { return value.replace(SECRET, (match, key) => `${key}: [REDACTED]`); }
 function statePath(id) { return resolve(stateDir, `${id}.json`); }
 function archivePath(id) { return resolve(stateDir, `${id}.tgz`); }
@@ -37,7 +38,10 @@ function startAutoCleanup(handoffId) {
     polling = true;
     try {
       const result = await collectStatus(handoffId);
-      if (!result.content[0].text.startsWith("Sandbox status: running")) stopAutoCleanup(handoffId);
+      if (!result.content[0].text.startsWith("Sandbox status: running")) {
+        stopAutoCleanup(handoffId);
+        notify(`Codex Handoff finished. Files were synchronized and the Sailbox was terminated. Call handoff_status with ${handoffId} to read the sandbox report and plan.`);
+      }
     } catch {
       // A transient provider error is retried on the next interval. The user
       // can still inspect the handoff with handoff_status.
@@ -146,6 +150,12 @@ async function credentialHandoff(args) {
   throw new Error("credential_mode must be one of: none, auth_file, access_token.");
 }
 
+function requestedModel(args) {
+  if (!args.model) return undefined;
+  if (typeof args.model !== "string" || !/^[A-Za-z0-9._:/-]+$/.test(args.model)) throw new Error("model must contain only letters, numbers, '.', '_', ':', '/', or '-'.");
+  return args.model;
+}
+
 async function runAdapter(payload, key) {
   const command = process.env.HANDOFF_PROVIDER_COMMAND;
   if (!command) throw new Error("No provider configured. Set HANDOFF_PROVIDER_COMMAND to an executable adapter path.");
@@ -174,6 +184,7 @@ async function handoff(args) {
     throw new Error("Codex Handoff cannot see SAILBOX_HANDOFF_KEY. For Codex Desktop, set it in the app's environment (on macOS: `launchctl setenv SAILBOX_HANDOFF_KEY 'your-key'`), fully quit Codex, then reopen it. Call handoff_doctor for safe diagnostics.");
   }
   const history = redact(String(args.conversation_history || ""));
+  const model = requestedModel(args);
   const brief = {
     protocol_version: 1,
     action: "launch",
@@ -181,7 +192,8 @@ async function handoff(args) {
     task: redact(args.task).slice(0, MAX_BRIEF_CHARS),
     conversation_history: history.slice(0, MAX_BRIEF_CHARS),
     workspace: args.workspace || process.cwd(),
-    requested_at: new Date().toISOString()
+    requested_at: new Date().toISOString(),
+    model
   };
   await mkdir(stateDir, { recursive: true });
   let workspace_archive_base64 = await packageWorkspace(brief.workspace, brief.handoff_id);
@@ -192,33 +204,49 @@ async function handoff(args) {
   if (!remote.id) throw new Error("Provider adapter response must include id.");
   await writeFile(statePath(brief.handoff_id), JSON.stringify({ handoff_id: brief.handoff_id, workspace: brief.workspace, remote, created_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
   startAutoCleanup(brief.handoff_id);
-  return text(`Sandbox started. Handoff ID: ${brief.handoff_id}\nRemote ID: ${remote.id}${remote.url ? `\nURL: ${remote.url}` : ""}${credential_handoff ? `\nCodex authentication forwarded via ${credential_handoff.type}; it was not saved locally.` : "\nNo Codex authentication was forwarded."}\nUse handoff_status with the handoff ID to collect the report.`);
+  return text(`Sandbox started. Handoff ID: ${brief.handoff_id}\nRemote ID: ${remote.id}${remote.url ? `\nURL: ${remote.url}` : ""}\nModel: ${model || "Codex default"}${credential_handoff ? `\nCodex authentication forwarded via ${credential_handoff.type}; it was not saved locally.` : "\nNo Codex authentication was forwarded."}\nUse handoff_status with the handoff ID to collect the report.`);
 }
 
 async function status(args) {
-  return await collectStatus(args.handoff_id);
+  return await collectStatus(args.handoff_id, true);
 }
 
-async function collectStatus(handoffId) {
+function completionText(saved) {
+  return text(`Sandbox workspace synchronized (${saved.synced_files} files) and Sailbox terminated.\n\nSandbox report and plan:\n\n${saved.final_report}`);
+}
+
+async function collectStatus(handoffId, deliverReport = false) {
   if (!handoffId) throw new Error("handoff_id is required");
   const saved = JSON.parse(await readFile(statePath(handoffId), "utf8"));
-  if (saved.completed_at || saved.failed_at) return text(`Sandbox handoff already ${saved.completed_at ? "completed and synchronized" : "failed and terminated"}.`);
+  if (saved.completed_at || saved.failed_at) {
+    if (saved.final_report && deliverReport) {
+      const result = saved.completed_at ? completionText(saved) : text(`Sandbox failed and was terminated.\n\n${saved.final_report}`);
+      await writeFile(statePath(handoffId), JSON.stringify({ ...saved, final_report: undefined, report_delivered_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
+      return result;
+    }
+    return text(`Sandbox handoff already ${saved.completed_at ? "completed and synchronized" : "failed and terminated"}.`);
+  }
   const key = await providerKey();
   if (!key) throw new Error("No Sail key is available to check this handoff.");
   const remote = await runAdapter({ protocol_version: 1, action: "status", handoff_id: handoffId, remote_id: saved.remote.id }, key);
   if (remote.status === "complete" && remote.report) {
     const synced = await syncWorkspace(saved, handoffId, key);
     await runAdapter({ protocol_version: 1, action: "terminate", handoff_id: handoffId, remote_id: saved.remote.id }, key);
-    const digest = createHash("sha256").update(remote.report).digest("hex").slice(0, 12);
-    await writeFile(statePath(handoffId), JSON.stringify({ handoff_id: handoffId, workspace: saved.workspace, remote: saved.remote, created_at: saved.created_at, completed_at: new Date().toISOString(), synced_files: synced.files }, null, 2), { mode: 0o600 });
+    const completed = { handoff_id: handoffId, workspace: saved.workspace, remote: saved.remote, created_at: saved.created_at, completed_at: new Date().toISOString(), synced_files: synced.files, final_report: remote.report };
+    await writeFile(statePath(handoffId), JSON.stringify(completed, null, 2), { mode: 0o600 });
     stopAutoCleanup(handoffId);
-    return text(`Sandbox workspace synchronized (${synced.files} files) and Sailbox terminated.\n\nSandbox report (sha256:${digest}):\n\n${remote.report}`);
+    const result = text(`Sandbox workspace synchronized (${synced.files} files) and Sailbox terminated.\n\nSandbox report and plan:\n\n${remote.report}`);
+    if (deliverReport) await writeFile(statePath(handoffId), JSON.stringify({ ...completed, final_report: undefined, report_delivered_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
+    return result;
   }
   if (remote.status === "failed") {
     await runAdapter({ protocol_version: 1, action: "terminate", handoff_id: handoffId, remote_id: saved.remote.id }, key).catch(() => {});
-    await writeFile(statePath(handoffId), JSON.stringify({ handoff_id: handoffId, workspace: saved.workspace, remote: saved.remote, created_at: saved.created_at, failed_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
+    const failed = { handoff_id: handoffId, workspace: saved.workspace, remote: saved.remote, created_at: saved.created_at, failed_at: new Date().toISOString(), final_report: remote.report || "No sandbox report was available." };
+    await writeFile(statePath(handoffId), JSON.stringify(failed, null, 2), { mode: 0o600 });
     stopAutoCleanup(handoffId);
-    return text(`Sandbox failed and was terminated.\n\n${remote.report || "No sandbox report was available."}`);
+    const result = text(`Sandbox failed and was terminated.\n\n${failed.final_report}`);
+    if (deliverReport) await writeFile(statePath(handoffId), JSON.stringify({ ...failed, final_report: undefined, report_delivered_at: new Date().toISOString() }, null, 2), { mode: 0o600 });
+    return result;
   }
   return text(`Sandbox status: ${remote.status || "unknown"}${remote.url ? `\nURL: ${remote.url}` : ""}${remote.detail ? `\n\n${remote.detail}` : ""}`);
 }
@@ -229,7 +257,7 @@ async function waitForReport(args) {
   const deadline = Date.now() + maxSeconds * 1000;
   let result;
   do {
-    result = await collectStatus(args.handoff_id);
+    result = await collectStatus(args.handoff_id, true);
     if (!result.content[0].text.startsWith("Sandbox status: running")) return result;
     if (Date.now() >= deadline) return result;
     await new Promise(resolveSleep => setTimeout(resolveSleep, 5000));
@@ -239,7 +267,7 @@ async function waitForReport(args) {
 
 const tools = [
   { name: "handoff_doctor", description: "Safely diagnose Sail-key, provider, and Codex-auth availability without displaying credential values.", inputSchema: { type: "object", properties: {} } },
-  { name: "handoff", description: "Start a configured sandbox only after explicit approval to forward Codex credentials. It never starts an unauthenticated sandbox.", inputSchema: { type: "object", required: ["task", "credential_mode", "allow_credential_forwarding"], properties: { task: { type: "string" }, conversation_history: { type: "string", description: "A concise current-task history supplied by the caller." }, workspace: { type: "string" }, credential_mode: { type: "string", enum: ["auth_file", "access_token"] }, allow_credential_forwarding: { type: "boolean", const: true, description: "Explicit user confirmation to forward the selected Codex credential to this trusted Sailbox." } } } },
+  { name: "handoff", description: "Start a configured sandbox only after explicit approval to forward Codex credentials. It never starts an unauthenticated sandbox.", inputSchema: { type: "object", required: ["task", "credential_mode", "allow_credential_forwarding"], properties: { task: { type: "string" }, conversation_history: { type: "string", description: "A concise current-task history supplied by the caller." }, workspace: { type: "string" }, model: { type: "string", description: "Optional Codex model for the sandbox, for example gpt-5.4." }, credential_mode: { type: "string", enum: ["auth_file", "access_token"] }, allow_credential_forwarding: { type: "boolean", const: true, description: "Explicit user confirmation to forward the selected Codex credential to this trusted Sailbox." } } } },
   { name: "handoff_status", description: "Poll a sandbox handoff and return its final report when complete.", inputSchema: { type: "object", required: ["handoff_id"], properties: { handoff_id: { type: "string" } } } }
   ,{ name: "handoff_wait", description: "Wait up to 55 seconds for a handoff report. Call repeatedly until it returns the final report, then relay its results and next-step plan to the initiating chat.", inputSchema: { type: "object", required: ["handoff_id"], properties: { handoff_id: { type: "string" }, max_wait_seconds: { type: "number", minimum: 1, maximum: 55 } } } }
 ];
