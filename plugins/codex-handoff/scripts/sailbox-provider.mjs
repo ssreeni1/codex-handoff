@@ -7,6 +7,7 @@ import { App, Client, Sailbox } from "@sailresearch/sdk";
 
 const APP_NAME = process.env.HANDOFF_SAIL_APP || "codex-handoff";
 const BOX_SIZE = process.env.HANDOFF_SAIL_SIZE || "s";
+const DASHBOARD_URL = "https://app.sailresearch.com";
 const WORKSPACE = "/workspace/codex-handoff";
 const BRIEF_PATH = `${WORKSPACE}/brief.md`;
 const REPORT_PATH = "/tmp/codex-handoff-report.md";
@@ -90,7 +91,7 @@ async function launch(request) {
     const launcher = await box.exec(`nohup bash ${RUNNER_PATH} > ${LOG_PATH} 2>&1 < /dev/null &`, { env: credential.env });
     const launchResult = await launcher.wait();
     if (launchResult.exitCode !== 0) throw new Error(`Could not start the Sailbox handoff runner: ${launchResult.stderr || launchResult.stdout}`);
-    return { id: box.sailboxId, url: `https://app.sailresearch.com/sailboxes/${box.sailboxId}` };
+    return { id: box.sailboxId, url: DASHBOARD_URL };
   } catch (error) {
     await box.terminate().catch(() => {});
     throw error;
@@ -110,7 +111,7 @@ async function status(request) {
     return { status: "failed", report: `Sailbox ${box.sailboxId} is ${box.status} before Codex wrote a final report.` };
   }
   const log = (await box.fs.exists(LOG_PATH)) ? (await box.fs.read(LOG_PATH)).toString().slice(-1200) : "Bootstrap is queued.";
-  return { status: "running", url: `https://app.sailresearch.com/sailboxes/${box.sailboxId}`, detail: log };
+  return { status: "running", url: DASHBOARD_URL, detail: log };
 }
 
 async function sync(request) {
