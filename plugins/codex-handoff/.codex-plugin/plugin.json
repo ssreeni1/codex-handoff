@@ -1,6 +1,6 @@
 {
   "name": "codex-handoff",
-  "version": "0.1.0+codex.20260728202005",
+  "version": "0.1.0+codex.20260728203617",
   "description": "Continue a Codex task in a Sailbox and return its synchronized result to the originating task.",
   "author": {
     "name": "Codex Handoff contributors"

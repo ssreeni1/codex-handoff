@@ -13,7 +13,7 @@ const stateDir = resolve(process.env.HANDOFF_STATE_DIR || ".handoff-state");
 const MAX_BRIEF_CHARS = 60_000;
 const MAX_SYNC_BYTES = 48 * 1024 * 1024;
 const EXCLUDED_PATH_SEGMENTS = new Set([".git", ".codex", ".env", "node_modules", ".aws", ".ssh", ".gcloud", ".kube"]);
-const AUTO_POLL_MS = Math.max(10_000, Number(process.env.HANDOFF_AUTO_POLL_MS || 45_000));
+const AUTO_POLL_MS = Math.max(5_000, Number(process.env.HANDOFF_AUTO_POLL_MS || 10_000));
 const WATCHER_URI = "ui://codex-handoff/watcher.html";
 const cleanupTimers = new Map();
 const SECRET = /(api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|password|secret)\s*[:=]\s*[^\s,;]+/gi;
@@ -51,6 +51,7 @@ function startAutoCleanup(handoffId) {
   const timer = setInterval(poll, AUTO_POLL_MS);
   timer.unref();
   cleanupTimers.set(handoffId, timer);
+  void poll();
 }
 
 async function runLocal(command, args) {
