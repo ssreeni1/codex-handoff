@@ -38,6 +38,7 @@ test("handoff exposes an in-chat watcher that can return completion to its initi
   const resource = await server.rpc(3, "resources/read", { uri: handoff._meta.ui.resourceUri });
   assert.match(resource.result.contents[0].text, /ui\/message/);
   assert.match(resource.result.contents[0].text, /handoff_status/);
+  assert.match(resource.result.contents[0].text, /Do not ask the user to check sandbox status/);
 });
 
 test("handoff syncs only provider-manifest files and retains no task history", async t => {
